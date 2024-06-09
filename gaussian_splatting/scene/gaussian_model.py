@@ -66,7 +66,7 @@ class GaussianModel:
         self.isotropic = False
 
     def build_covariance_from_scaling_rotation(
-        self, scaling, scaling_modifier, rotation
+            self, scaling, scaling_modifier, rotation
     ):
         L = build_scaling_rotation(scaling_modifier * scaling, rotation)
         actual_covariance = L @ L.transpose(1, 2)
@@ -120,10 +120,10 @@ class GaussianModel:
 
             if self.config["Dataset"]["sensor_type"] == "monocular":
                 depth_raw = (
-                    np.ones_like(depth_raw)
-                    + (np.random.randn(depth_raw.shape[0], depth_raw.shape[1]) - 0.5)
-                    * 0.05
-                ) * scale
+                                    np.ones_like(depth_raw)
+                                    + (np.random.randn(depth_raw.shape[0], depth_raw.shape[1]) - 0.5)
+                                    * 0.05
+                            ) * scale
 
             rgb = o3d.geometry.Image(rgb_raw.astype(np.uint8))
             depth = o3d.geometry.Image(depth_raw.astype(np.float32))
@@ -135,10 +135,13 @@ class GaussianModel:
             downsample_factor = self.config["Dataset"]["pcd_downsample_init"]
         else:
             downsample_factor = self.config["Dataset"]["pcd_downsample"]
+
         point_size = self.config["Dataset"]["point_size"]
         if "adaptive_pointsize" in self.config["Dataset"]:
             if self.config["Dataset"]["adaptive_pointsize"]:
                 point_size = min(0.05, point_size * np.median(depth))
+
+        # 从颜色图像和深度图像创建 RGBD 图像
         rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
             rgb,
             depth,
@@ -147,7 +150,10 @@ class GaussianModel:
             convert_rgb_to_intensity=False,
         )
 
+        # 获取世界坐标到摄像机坐标的转换矩阵，并转换为 NumPy 数组
         W2C = getWorld2View2(cam.R, cam.T).cpu().numpy()
+
+        # 从 RGBD 图像和相机参数创建点云
         pcd_tmp = o3d.geometry.PointCloud.create_from_rgbd_image(
             rgbd,
             o3d.camera.PinholeCameraIntrinsic(
@@ -161,38 +167,54 @@ class GaussianModel:
             extrinsic=W2C,
             project_valid_depth_only=True,
         )
+
+        # 随机降采样点云
         pcd_tmp = pcd_tmp.random_down_sample(1.0 / downsample_factor)
+        # 获取降采样后的点云坐标和颜色
         new_xyz = np.asarray(pcd_tmp.points)
         new_rgb = np.asarray(pcd_tmp.colors)
 
+        # 创建input_ply对象并存储在 `ply_input` 属性中，类似gaussian splatting中保存的input.ply
         pcd = BasicPointCloud(
             points=new_xyz, colors=new_rgb, normals=np.zeros((new_xyz.shape[0], 3))
         )
         self.ply_input = pcd
 
+        # 将点云坐标转换为 Torch 张量并移到 GPU
         fused_point_cloud = torch.from_numpy(np.asarray(pcd.points)).float().cuda()
+
+        # 将点云颜色转换为球谐函数表示并移到 GPU
         fused_color = RGB2SH(torch.from_numpy(np.asarray(pcd.colors)).float().cuda())
+        # 初始化颜色特征张量并将其移到 GPU
         features = (
             torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2))
             .float()
             .cuda()
         )
+        # 将球谐函数颜色赋值给特征张量
         features[:, :3, 0] = fused_color
+        # 将其他部分初始化为 0
         features[:, 3:, 1:] = 0.0
 
+        # 计算每个点的距离平方，并进行裁剪以避免小值，然后调整点大小
         dist2 = (
-            torch.clamp_min(
-                distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()),
-                0.0000001,
-            )
-            * point_size
+                torch.clamp_min(
+                    distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()),
+                    0.0000001,
+                )
+                * point_size
         )
+        # 计算尺度并取对数平方根
         scales = torch.log(torch.sqrt(dist2))[..., None]
+        # 如果不是各向同性，则扩展尺度到 3 维
         if not self.isotropic:
             scales = scales.repeat(1, 3)
 
+        # 初始化旋转张量为全零，并将第一个元素设为 1（表示单位四元数）
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
         rots[:, 0] = 1
+
+        # 计算每个点的不透明度并取逆 sigmoid
         opacities = inverse_sigmoid(
             0.5
             * torch.ones(
@@ -206,7 +228,7 @@ class GaussianModel:
         self.spatial_lr_scale = spatial_lr_scale
 
     def extend_from_pcd(
-        self, fused_point_cloud, features, scales, rots, opacities, kf_id
+            self, fused_point_cloud, features, scales, rots, opacities, kf_id
     ):
         new_xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
         new_features_dc = nn.Parameter(
@@ -233,7 +255,7 @@ class GaussianModel:
         )
 
     def extend_from_pcd_seq(
-        self, cam_info, kf_id=-1, init=False, scale=2.0, depthmap=None
+            self, cam_info, kf_id=-1, init=False, scale=2.0, depthmap=None
     ):
         fused_point_cloud, features, scales, rots, opacities = (
             self.create_pcd_from_image(cam_info, init, scale=scale, depthmap=depthmap)
@@ -365,7 +387,7 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
 
     def reset_opacity_nonvisible(
-        self, visibility_filters
+            self, visibility_filters
     ):  ##Reset opacity for only non-visible gaussians
         opacities_new = inverse_sigmoid(torch.ones_like(self.get_opacity) * 0.4)
 
@@ -555,15 +577,15 @@ class GaussianModel:
         return optimizable_tensors
 
     def densification_postfix(
-        self,
-        new_xyz,
-        new_features_dc,
-        new_features_rest,
-        new_opacities,
-        new_scaling,
-        new_rotation,
-        new_kf_ids=None,
-        new_n_obs=None,
+            self,
+            new_xyz,
+            new_features_dc,
+            new_features_rest,
+            new_opacities,
+            new_scaling,
+            new_rotation,
+            new_kf_ids=None,
+            new_n_obs=None,
     ):
         d = {
             "xyz": new_xyz,

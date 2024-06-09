@@ -4,8 +4,8 @@ Results:
   save_dir: "results"
   save_trj: True
   save_trj_kf_intv: 5
-  use_gui: True
-  eval_rendering: False
+  use_gui: False
+  eval_rendering: True
   use_wandb: False
 
 Dataset:
