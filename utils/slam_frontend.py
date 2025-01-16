@@ -55,11 +55,14 @@ class FrontEnd(mp.Process):
         self.single_thread = self.config["Training"]["single_thread"]
 
     def add_new_keyframe(self, cur_frame_idx, depth=None, opacity=None, init=False):
+        # 获取valid_rgb的mask
         rgb_boundary_threshold = self.config["Training"]["rgb_boundary_threshold"]
         self.kf_indices.append(cur_frame_idx)
         viewpoint = self.cameras[cur_frame_idx]
         gt_img = viewpoint.original_image.cuda()
         valid_rgb = (gt_img.sum(dim=0) > rgb_boundary_threshold)[None]
+
+        # 对于mono，没有深度就随机初始化一个深度，有深度就进行过滤，排除无效深度
         if self.monocular:
             if depth is None:
                 initial_depth = 2 * torch.ones(1, gt_img.shape[1], gt_img.shape[2])
@@ -102,33 +105,49 @@ class FrontEnd(mp.Process):
 
                 initial_depth[~valid_rgb] = 0  # Ignore the invalid rgb pixels
             return initial_depth.cpu().numpy()[0]
+
+        # 对于rgb-d，直接使用观测深度，也不进行专门的过滤了，只根据valid_rgb mask处理一下
         # use the observed depth
         initial_depth = torch.from_numpy(viewpoint.depth).unsqueeze(0)
         initial_depth[~valid_rgb.cpu()] = 0  # Ignore the invalid rgb pixels
         return initial_depth[0].numpy()
 
     def initialize(self, cur_frame_idx, viewpoint):
+        # 注意：这个函数是为了backend的初始化准备的。
+        # 如果是monocular，后续还会有针对的操作，这个函数可能没办法完全实现初始化。
+        # 否则如果是RGB-D，在这个函数中就可以完成初始化了。
         self.initialized = not self.monocular
+
         self.kf_indices = []
         self.iteration_count = 0
         self.occ_aware_visibility = {}
         self.current_window = []
+
         # remove everything from the queues
         while not self.backend_queue.empty():
             self.backend_queue.get()
 
+        # 疑问：为什么使用ground truth进行初始化？是为了方便和gt做比较吗？
         # Initialise the frame at the ground truth pose
         viewpoint.update_RT(viewpoint.R_gt, viewpoint.T_gt)
 
+        # 为什么又写一遍？
         self.kf_indices = []
+
+        # mono：随机初始化深度
+        # rgb-d：直接使用观测深度
         depth_map = self.add_new_keyframe(cur_frame_idx, init=True)
+
+        # 向backend发送init的指令
         self.request_init(cur_frame_idx, viewpoint, depth_map)
         self.reset = False
 
     def tracking(self, cur_frame_idx, viewpoint):
         prev = self.cameras[cur_frame_idx - self.use_every_n_frames]
+        # 使用前一帧位姿来初始化，居然不用匀速运动模型。
         viewpoint.update_RT(prev.R, prev.T)
 
+        # 设置一组需要优化的参数
         opt_params = []
         opt_params.append(
             {
@@ -159,8 +178,14 @@ class FrontEnd(mp.Process):
             }
         )
 
+        # 初始化pose的optimizer
         pose_optimizer = torch.optim.Adam(opt_params)
+
+        # 迭代指定次数，对pose等参数进行优化
         for tracking_itr in range(self.tracking_itr_num):
+            #################################
+            # 通过inverse 3DGS的方式优化pose，这个过程会非常花费时间。
+            #################################
             render_pkg = render(
                 viewpoint, self.gaussians, self.pipeline_params, self.background
             )
@@ -178,6 +203,7 @@ class FrontEnd(mp.Process):
             with torch.no_grad():
                 pose_optimizer.step()
                 converged = update_pose(viewpoint)
+            #################################
 
             if tracking_itr % 10 == 0:
                 self.q_main2vis.put(
@@ -189,6 +215,7 @@ class FrontEnd(mp.Process):
                         else np.zeros((viewpoint.image_height, viewpoint.image_width)),
                     )
                 )
+
             if converged:
                 break
 
@@ -315,6 +342,8 @@ class FrontEnd(mp.Process):
 
     def run(self):
         cur_frame_idx = 0
+        # 根据相机内参生成一个投影矩阵（Projection Matrix）用于计算 3D 图像的投影变换，图形学用的比较多？
+        # znear 和 zfar 是 3D 投影中视锥体的近裁剪平面和远裁剪平面的距离，用于定义相机能够捕获的深度范围
         projection_matrix = getProjectionMatrix2(
             znear=0.01,
             zfar=100.0,
@@ -329,7 +358,13 @@ class FrontEnd(mp.Process):
         tic = torch.cuda.Event(enable_timing=True)
         toc = torch.cuda.Event(enable_timing=True)
 
+        #################################
+        # 正式进入tracking线程
+        #################################
         while True:
+            #################################
+            # 和GUI界面通信，获取GUI界面的控制信息
+            #################################
             if self.q_vis2main.empty():
                 if self.pause:
                     continue
@@ -341,9 +376,19 @@ class FrontEnd(mp.Process):
                     continue
                 else:
                     self.backend_queue.put(["unpause"])
+            #################################
 
+            #################################
+            # tracking线程的内部逻辑
+            #################################
+            # 如果backend没有发送控制信息，进行正常的tracking流程
             if self.frontend_queue.empty():
+                #################################
+                # tracking前的逻辑判断
+                #################################
                 tic.record()
+                # 如果运行完了整个序列，保存结果，结束循环
+                # TODO 疑问：为什么让frontend来做这个事情，不等backend把最后几个keyframe处理一下吗？
                 if cur_frame_idx >= len(self.dataset):
                     if self.save_results:
                         eval_ate(
@@ -359,38 +404,52 @@ class FrontEnd(mp.Process):
                         )
                     break
 
+                # 如果需要初始化，进行等待
+                # 只有被reset的时候才会需要初始化
                 if self.requested_init:
                     time.sleep(0.01)
                     continue
 
+                # 如果是单线程，而且刚创建关键帧，就先进行等待
                 if self.single_thread and self.requested_keyframe > 0:
                     time.sleep(0.01)
                     continue
 
+                # 如果没有完成初始化，而且刚创建关键帧，也进行等待
                 if not self.initialized and self.requested_keyframe > 0:
                     time.sleep(0.01)
                     continue
 
+                # 创建当前帧的viewpoint
                 viewpoint = Camera.init_from_dataset(
                     self.dataset, cur_frame_idx, projection_matrix
                 )
+                # 根据边缘检测等策略，创建grad mask
                 viewpoint.compute_grad_mask(self.config)
 
                 self.cameras[cur_frame_idx] = viewpoint
 
+                # 进行初始化，注意：frontend初始化时，reset为True。
                 if self.reset:
                     self.initialize(cur_frame_idx, viewpoint)
                     self.current_window.append(cur_frame_idx)
                     cur_frame_idx += 1
                     continue
 
+                # 判断是否完成初始化。
+                # 对于rgb-d，运行了initialize函数就初始化了；
+                # 对于mono，如果current_window积攒了足够的数据，就认为能够支持正确的初始化。
                 self.initialized = self.initialized or (
                     len(self.current_window) == self.window_size
                 )
+                #################################
 
                 # Tracking
                 render_pkg = self.tracking(cur_frame_idx, viewpoint)
 
+                #################################
+                # 和GUI相关的代码，对tracking主要逻辑没有影响
+                #################################
                 current_window_dict = {}
                 current_window_dict[self.current_window[0]] = self.current_window[1:]
                 keyframes = [self.cameras[kf_idx] for kf_idx in self.current_window]
@@ -403,21 +462,31 @@ class FrontEnd(mp.Process):
                         kf_window=current_window_dict,
                     )
                 )
+                #################################
 
+                #################################
+                # keyframe创建、管理流程
+                #################################
+                # 如果创建了新的keyframe，那么释放当前帧的内存，并且跳过下面的步骤
                 if self.requested_keyframe > 0:
                     self.cleanup(cur_frame_idx)
                     cur_frame_idx += 1
                     continue
 
+                # 如果目前没有新的keyframe，开始判断是否创建keyframe
                 last_keyframe_idx = self.current_window[0]
                 check_time = (cur_frame_idx - last_keyframe_idx) >= self.kf_interval
                 curr_visibility = (render_pkg["n_touched"] > 0).long()
+                # 如果与上一个关键帧距离过大，或者重叠度较低&和上个关键帧有一定的距离，就创建关键帧
                 create_kf = self.is_keyframe(
                     cur_frame_idx,
                     last_keyframe_idx,
                     curr_visibility,
                     self.occ_aware_visibility,
                 )
+                # 如果当前的滑动窗口没有满，使用更宽松的条件判断是否需要创建关键帧
+                # TODO 疑问：如果是这样的话，可以把create_kf的条件也放进来吧？
+                #           不过应该不存在上面的条件满足，但下面的条件不满足的情况。
                 if len(self.current_window) < self.window_size:
                     union = torch.logical_or(
                         curr_visibility, self.occ_aware_visibility[last_keyframe_idx]
@@ -430,34 +499,45 @@ class FrontEnd(mp.Process):
                         check_time
                         and point_ratio < self.config["Training"]["kf_overlap"]
                     )
+                # 如果是单线程模式，还要再检查一遍时间间隔是否满足要求。
+                # WHY？因为单线程不想创建太多的关键帧？
                 if self.single_thread:
                     create_kf = check_time and create_kf
+                # 如果确定当前帧是关键帧，创建关键帧
                 if create_kf:
+                    # 将当前帧添加到滑动窗口，并且删除与当前帧重叠度小于阈值的关键帧
+                    # 如果重叠度都大于阈值，而且滑动窗口的size超了，就删除重叠的最少的那个关键帧（看起来像个BUG，为什么重叠度都这么大还会创建关键帧呢）
                     self.current_window, removed = self.add_to_window(
                         cur_frame_idx,
                         curr_visibility,
                         self.occ_aware_visibility,
                         self.current_window,
                     )
+                    # monocular的情况下，如果没有完成initialized，而且又有keyframe被删除，说明新进来的帧overlap较少，需要resetting。
                     if self.monocular and not self.initialized and removed is not None:
                         self.reset = True
                         Log(
                             "Keyframes lacks sufficient overlap to initialize the map, resetting."
                         )
                         continue
+                    # 如果是monocular，使用渲染的depth和opacity来为当前关键帧创建depth
+                    # 如果是RGB-D，直接使用观测的depth，渲染的结果就不用了
                     depth_map = self.add_new_keyframe(
                         cur_frame_idx,
                         depth=render_pkg["depth"],
                         opacity=render_pkg["opacity"],
                         init=False,
                     )
+                    # 向backend发送消息，将new keyframe发送过去
                     self.request_keyframe(
                         cur_frame_idx, viewpoint, self.current_window, depth_map
                     )
-                else:
+                else: # 否则，释放当前帧的内存
                     self.cleanup(cur_frame_idx)
                 cur_frame_idx += 1
+                #################################
 
+                # 保存当前帧的评估结果
                 if (
                     self.save_results
                     and self.save_trj
@@ -474,11 +554,19 @@ class FrontEnd(mp.Process):
                     )
                 toc.record()
                 torch.cuda.synchronize()
+                # FIXME 看起来如果创建了关键帧，frontend还需要等一等，这样的话tracking的速率就被限制了
+                #  这里可能是一个小trick，keyframe到了backend之后，就要优化场景的gaussian了
+                #  而这个期间，场景的gaussian可能不太适合tracking，会影响tracking的结果
+                #
+                #  可能的改进思路：创建一个mask，新增的区域不参与tracking，这样就可以全速tracking了。
+                #   但是这样可能也有问题，overlapping变小了，tracking的结果不一定更好。
+                #   说到底还是inverse 3DGS的tracking太脆弱了。。。
                 if create_kf:
                     # throttle at 3fps when keyframe is added
                     duration = tic.elapsed_time(toc)
                     time.sleep(max(0.01, 1.0 / 3.0 - duration / 1000))
-            else:
+
+            else: # 如果接收到了控制信息，优先处理控制信息
                 data = self.frontend_queue.get()
                 if data[0] == "sync_backend":
                     self.sync_backend(data)
