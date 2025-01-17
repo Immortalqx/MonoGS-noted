@@ -140,11 +140,15 @@ class BackEnd(mp.Process):
         return render_pkg
 
     def map(self, current_window, prune=False, iters=1):
+        # 下面这个情况应该不会发生？前面已经针对性地处理过了呀。
         if len(current_window) == 0:
             return
 
+        # 当前关键帧窗口的viewpoint
         viewpoint_stack = [self.viewpoints[kf_idx] for kf_idx in current_window]
+        # 非当前关键帧窗口的随机viewpoint
         random_viewpoint_stack = []
+        # 优化多少帧的pose，config中默认是5
         frames_to_optimize = self.config["Training"]["pose_window"]
 
         current_window_set = set(current_window)
@@ -153,6 +157,7 @@ class BackEnd(mp.Process):
                 continue
             random_viewpoint_stack.append(viewpoint)
 
+        # 进入mapping最核心的流程
         for _ in range(iters):
             self.iteration_count += 1
             self.last_sent += 1
@@ -165,6 +170,7 @@ class BackEnd(mp.Process):
 
             keyframes_opt = []
 
+            # 首先，渲染当前关键帧窗口的所有viewpoint，计算loss
             for cam_idx in range(len(current_window)):
                 viewpoint = viewpoint_stack[cam_idx]
                 keyframes_opt.append(viewpoint)
@@ -197,6 +203,7 @@ class BackEnd(mp.Process):
                 radii_acm.append(radii)
                 n_touched_acm.append(n_touched)
 
+            # 之后，从 random_viewpoint_stack 中随机选择两个viewpoint进行渲染，计算loss
             for cam_idx in torch.randperm(len(random_viewpoint_stack))[:2]:
                 viewpoint = random_viewpoint_stack[cam_idx]
                 render_pkg = render(
@@ -225,6 +232,7 @@ class BackEnd(mp.Process):
                 viewspace_point_tensor_acm.append(viewspace_point_tensor)
                 visibility_filter_acm.append(visibility_filter)
                 radii_acm.append(radii)
+                # TODO 这里为什么不关注n_touched了？
 
             scaling = self.gaussians.get_scaling
             isotropic_loss = torch.abs(scaling - scaling.mean(dim=1).view(-1, 1))
@@ -365,19 +373,27 @@ class BackEnd(mp.Process):
         self.frontend_queue.put(msg)
 
     def run(self):
+        #################################
+        # 直奔主题，进入Mapping的主要流程
+        #################################
         while True:
+            # 如果没有new keyframe发送过来
             if self.backend_queue.empty():
+                # 如果是pause、当前关键帧窗口为空、单线程模式，进行等待
                 if self.pause:
                     time.sleep(0.01)
                     continue
                 if len(self.current_window) == 0:
                     time.sleep(0.01)
                     continue
-
                 if self.single_thread:
                     time.sleep(0.01)
                     continue
+                # 否则，多线程&关键帧窗口不为空，优化当前关键帧窗口，迭代1次
                 self.map(self.current_window)
+                # 如果距离上一次发送关键帧已经迭代优化了10次以上，还是优化当前关键帧窗口，并且进行prune，迭代10次
+                # 其实last_sent是记录上次和frontend同步到现在，mapping迭代了多少轮。
+                # 不过同步一般发生在frontend向backend发送keyframe。
                 if self.last_sent >= 10:
                     self.map(self.current_window, prune=True, iters=10)
                     self.push_to_frontend()
@@ -475,6 +491,9 @@ class BackEnd(mp.Process):
                     self.push_to_frontend("keyframe")
                 else:
                     raise Exception("Unprocessed data", data)
+        #################################
+
+        # 清理用于通信的两个队列中的信息
         while not self.backend_queue.empty():
             self.backend_queue.get()
         while not self.frontend_queue.empty():
