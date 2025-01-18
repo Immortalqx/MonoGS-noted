@@ -294,9 +294,14 @@ if __name__ == "__main__":
         mkdir_p(config["Results"]["save_dir"])
         current_datetime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         path = config["Dataset"]["dataset_path"].split("/")
-        save_dir = os.path.join(
-            config["Results"]["save_dir"], path[-3] + "_" + path[-2], current_datetime
-        )
+        if config["Dataset"]["type"] == "replica":
+            save_dir = os.path.join(
+                config["Results"]["save_dir"], path[-3] + "_" + path[-2], current_datetime
+            )
+        else:
+            save_dir = os.path.join(
+                config["Results"]["save_dir"], path[-2] + "_" + path[-1], current_datetime
+            )
         tmp = args.config
         tmp = tmp.split(".")[0]
         config["Results"]["save_dir"] = save_dir
