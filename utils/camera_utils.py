@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import cv2
 
 from gaussian_splatting.utils.graphics_utils import getProjectionMatrix2, getWorld2View2
 from utils.slam_utils import image_gradient, image_gradient_mask
@@ -7,21 +8,21 @@ from utils.slam_utils import image_gradient, image_gradient_mask
 
 class Camera(nn.Module):
     def __init__(
-        self,
-        uid,
-        color,
-        depth,
-        gt_T,
-        projection_matrix,
-        fx,
-        fy,
-        cx,
-        cy,
-        fovx,
-        fovy,
-        image_height,
-        image_width,
-        device="cuda:0",
+            self,
+            uid,
+            color,
+            depth,
+            gt_T,
+            projection_matrix,
+            fx,
+            fy,
+            cx,
+            cy,
+            fovx,
+            fovy,
+            image_height,
+            image_width,
+            device="cuda:0",
     ):
         super(Camera, self).__init__()
         self.uid = uid
@@ -34,6 +35,11 @@ class Camera(nn.Module):
         self.T_gt = gt_T[:3, 3]
 
         self.original_image = color
+        # FIXME 加一个depth的检查，MonoGS的代码似乎默认depth和image的size是相等的
+        #  然而对于ScanNet等数据集，depth和image还是有一点差距。。。
+        #  这里resize depth真的好吗？？？
+        if color.shape[1:] != depth.shape:
+            depth = cv2.resize(depth, (color.shape[2], color.shape[1]), interpolation=cv2.INTER_NEAREST)
         self.depth = depth
         self.grad_mask = None
 
@@ -119,7 +125,7 @@ class Camera(nn.Module):
         mask_v, mask_h = image_gradient_mask(gray_img)
         gray_grad_v = gray_grad_v * mask_v
         gray_grad_h = gray_grad_h * mask_h
-        img_grad_intensity = torch.sqrt(gray_grad_v**2 + gray_grad_h**2)
+        img_grad_intensity = torch.sqrt(gray_grad_v ** 2 + gray_grad_h ** 2)
 
         if config["Dataset"]["type"] == "replica":
             row, col = 32, 32
@@ -128,10 +134,10 @@ class Camera(nn.Module):
             for r in range(row):
                 for c in range(col):
                     block = img_grad_intensity[
-                        :,
-                        r * int(h / row) : (r + 1) * int(h / row),
-                        c * int(w / col) : (c + 1) * int(w / col),
-                    ]
+                            :,
+                            r * int(h / row): (r + 1) * int(h / row),
+                            c * int(w / col): (c + 1) * int(w / col),
+                            ]
                     th_median = block.median()
                     block[block > (th_median * multiplier)] = 1
                     block[block <= (th_median * multiplier)] = 0
@@ -139,7 +145,7 @@ class Camera(nn.Module):
         else:
             median_img_grad_intensity = img_grad_intensity.median()
             self.grad_mask = (
-                img_grad_intensity > median_img_grad_intensity * edge_threshold
+                    img_grad_intensity > median_img_grad_intensity * edge_threshold
             )
 
     def clean(self):

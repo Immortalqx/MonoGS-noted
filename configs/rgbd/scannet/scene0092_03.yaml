@@ -1,0 +1,18 @@
+inherit_from: "configs/rgbd/scannet/base_config.yaml"
+
+Dataset:
+  dataset_path: "datasets/scannet/scene0092_03"
+  Calibration:
+    fx: 1170.187988
+    fy: 1170.187988
+    cx: 647.750000
+    cy: 483.750000
+    k1: 0.0
+    k2: 0.0
+    p1: 0.0
+    p2: 0.0
+    k3: 0.0
+    distorted: False
+    width: 1296
+    height: 968
+    depth_scale: 1000.0

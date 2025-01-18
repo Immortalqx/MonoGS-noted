@@ -68,7 +68,7 @@ class TUMParser:
                 k = np.argmin(np.abs(tstamp_pose - t))
 
                 if (np.abs(tstamp_depth[j] - t) < max_dt) and (
-                    np.abs(tstamp_pose[k] - t) < max_dt
+                        np.abs(tstamp_pose[k] - t) < max_dt
                 ):
                     associations.append((i, j, k))
 
@@ -173,8 +173,7 @@ class EuRoCParser:
             trans = data[pose_indices[i], 1:4]
             quat = data[pose_indices[i], 4:8]
             quat = quat[[1, 2, 3, 0]]
-            
-            
+
             T_w_i = trimesh.transformations.quaternion_matrix(np.roll(quat, 1))
             T_w_i[:3, 3] = trans
             T_w_c = np.dot(T_w_i, T_i_c0)
@@ -431,11 +430,11 @@ class RealsenseDataset(BaseDataset):
         super().__init__(args, path, config)
         self.pipeline = rs.pipeline()
         self.h, self.w = 720, 1280
-        
+
         self.depth_scale = 0
         if self.config["Dataset"]["sensor_type"] == "depth":
-            self.has_depth = True 
-        else: 
+            self.has_depth = True
+        else:
             self.has_depth = False
 
         self.rs_config = rs.config()
@@ -458,7 +457,7 @@ class RealsenseDataset(BaseDataset):
             self.profile.get_stream(rs.stream.color)
         )
         self.rgb_intrinsics = self.rgb_profile.get_intrinsics()
-        
+
         self.fx = self.rgb_intrinsics.fx
         self.fy = self.rgb_intrinsics.fy
         self.cx = self.rgb_intrinsics.ppx
@@ -479,14 +478,11 @@ class RealsenseDataset(BaseDataset):
 
         if self.has_depth:
             self.depth_sensor = self.profile.get_device().first_depth_sensor()
-            self.depth_scale  = self.depth_sensor.get_depth_scale()
+            self.depth_scale = self.depth_sensor.get_depth_scale()
             self.depth_profile = rs.video_stream_profile(
                 self.profile.get_stream(rs.stream.depth)
             )
             self.depth_intrinsics = self.depth_profile.get_intrinsics()
-        
-        
-
 
     def __getitem__(self, idx):
         pose = torch.eye(4, device=self.device, dtype=self.dtype)
@@ -498,7 +494,7 @@ class RealsenseDataset(BaseDataset):
             aligned_frames = self.align.process(frameset)
             rgb_frame = aligned_frames.get_color_frame()
             aligned_depth_frame = aligned_frames.get_depth_frame()
-            depth = np.array(aligned_depth_frame.get_data())*self.depth_scale
+            depth = np.array(aligned_depth_frame.get_data()) * self.depth_scale
             depth[depth < 0] = 0
             np.nan_to_num(depth, nan=1000)
         else:
@@ -519,6 +515,54 @@ class RealsenseDataset(BaseDataset):
         return image, depth, pose
 
 
+class ScanNetParser:
+    def __init__(self, input_folder):
+        self.input_folder = input_folder
+        self.color_paths = sorted(glob.glob(os.path.join(self.input_folder, 'color', '*.jpg')),
+                                  key=lambda x: int(os.path.basename(x)[:-4]))
+        self.depth_paths = sorted(glob.glob(os.path.join(self.input_folder, 'depth', '*.png')),
+                                  key=lambda x: int(os.path.basename(x)[:-4]))
+        self.n_img = len(self.color_paths)
+        self.load_poses(os.path.join(self.input_folder, 'pose'))
+
+    def load_poses(self, path):
+        self.poses = []
+        pose_paths = sorted(glob.glob(os.path.join(path, '*.txt')),
+                            key=lambda x: int(os.path.basename(x)[:-4]))
+
+        i = 0
+        frames = []
+        for pose_path in pose_paths:
+            with open(pose_path, "r") as f:
+                lines = f.readlines()
+            ls = []
+            for line in lines:
+                l = list(map(float, line.split(' ')))
+                ls.append(l)
+            c2w = np.array(ls).reshape(4, 4)
+            c2w = np.linalg.inv(c2w)
+            self.poses.append(c2w)
+            frame = {
+                "file_path": self.color_paths[i],
+                "depth_path": self.depth_paths[i],
+                "transform_matrix": c2w.tolist(),
+            }
+            frames.append(frame)
+            i += 1
+        self.frames = frames
+
+
+class ScanNet(MonocularDataset):
+    def __init__(self, args, path, config):
+        super().__init__(args, path, config)
+        dataset_path = config["Dataset"]["dataset_path"]
+        parser = ScanNetParser(dataset_path)
+        self.num_imgs = parser.n_img
+        self.color_paths = parser.color_paths
+        self.depth_paths = parser.depth_paths
+        self.poses = parser.poses
+
+
 def load_dataset(args, path, config):
     if config["Dataset"]["type"] == "tum":
         return TUMDataset(args, path, config)
@@ -528,5 +572,7 @@ def load_dataset(args, path, config):
         return EurocDataset(args, path, config)
     elif config["Dataset"]["type"] == "realsense":
         return RealsenseDataset(args, path, config)
+    elif config["Dataset"]["type"] == "scannet":
+        return ScanNet(args, path, config)
     else:
         raise ValueError("Unknown dataset type")
