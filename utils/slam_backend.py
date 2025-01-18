@@ -84,6 +84,8 @@ class BackEnd(mp.Process):
             self.backend_queue.get()
 
     def initialize_map(self, cur_frame_idx, viewpoint):
+        # 简化版的def map()
+        # 下面是更新scene gaussian的一个基本流程。
         for mapping_iteration in range(self.init_itr_num):
             self.iteration_count += 1
             render_pkg = render(
@@ -232,7 +234,8 @@ class BackEnd(mp.Process):
                 viewspace_point_tensor_acm.append(viewspace_point_tensor)
                 visibility_filter_acm.append(visibility_filter)
                 radii_acm.append(radii)
-                # TODO 这里为什么不关注n_touched了？
+                # 这里为什么不关注n_touched了？
+                # 后面致密化的过程，主要关注current_window，这里的random viewpoint不属于current_window
 
             scaling = self.gaussians.get_scaling
             isotropic_loss = torch.abs(scaling - scaling.mean(dim=1).view(-1, 1))
@@ -269,6 +272,9 @@ class BackEnd(mp.Process):
                             to_prune = torch.logical_and(
                                 self.gaussians.n_obs <= prune_coviz, mask
                             )
+                        # 似乎看起来，只有单目才会专门prune gaussian？？？
+                        # 而RGB-D就只能通过后续的densify_and_prune了
+                        # 那看起来这个prune是专门为了mono设计，根据visibility删除gaussian
                         if to_prune is not None and self.monocular:
                             self.gaussians.prune_points(to_prune.cuda())
                             for idx in range((len(current_window))):
@@ -282,6 +288,7 @@ class BackEnd(mp.Process):
                         # # make sure we don't split the gaussians, break here.
                     return False
 
+                # 更新相关gaussian的梯度，为后面的致密化做准备
                 for idx in range(len(viewspace_point_tensor_acm)):
                     self.gaussians.max_radii2D[visibility_filter_acm[idx]] = torch.max(
                         self.gaussians.max_radii2D[visibility_filter_acm[idx]],
@@ -377,7 +384,7 @@ class BackEnd(mp.Process):
         # 直奔主题，进入Mapping的主要流程
         #################################
         while True:
-            # 如果没有new keyframe发送过来
+            # 如果没有控制信息发送过来
             if self.backend_queue.empty():
                 # 如果是pause、当前关键帧窗口为空、单线程模式，进行等待
                 if self.pause:
@@ -397,7 +404,7 @@ class BackEnd(mp.Process):
                 if self.last_sent >= 10:
                     self.map(self.current_window, prune=True, iters=10)
                     self.push_to_frontend()
-            else:
+            else: # 如果有控制信息发过来
                 data = self.backend_queue.get()
                 if data[0] == "stop":
                     break
@@ -405,10 +412,10 @@ class BackEnd(mp.Process):
                     self.pause = True
                 elif data[0] == "unpause":
                     self.pause = False
-                elif data[0] == "color_refinement":
+                elif data[0] == "color_refinement": # 结束整个SLAM之前调用，刷一波指标
                     self.color_refinement()
                     self.push_to_frontend()
-                elif data[0] == "init":
+                elif data[0] == "init": # frontend在init的时候会给这里发一个init指令
                     cur_frame_idx = data[1]
                     viewpoint = data[2]
                     depth_map = data[3]
@@ -416,13 +423,15 @@ class BackEnd(mp.Process):
                     self.reset()
 
                     self.viewpoints[cur_frame_idx] = viewpoint
+
+                    # 往场景中添加new keyframe的点云
                     self.add_next_kf(
                         cur_frame_idx, viewpoint, depth_map=depth_map, init=True
                     )
+                    # 初始化地图
                     self.initialize_map(cur_frame_idx, viewpoint)
                     self.push_to_frontend("init")
-
-                elif data[0] == "keyframe":
+                elif data[0] == "keyframe": # 如果frontend往这里发送了keyframe
                     cur_frame_idx = data[1]
                     viewpoint = data[2]
                     current_window = data[3]
@@ -486,6 +495,7 @@ class BackEnd(mp.Process):
                         )
                     self.keyframe_optimizers = torch.optim.Adam(opt_params)
 
+                    # 这里为什么要map两次呢？看起来像是迭代一定次数后做一次prune，为了代码方便就分两次写了？
                     self.map(self.current_window, iters=iter_per_kf)
                     self.map(self.current_window, prune=True)
                     self.push_to_frontend("keyframe")
