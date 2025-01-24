@@ -11,6 +11,10 @@ from evo.core.trajectory import PosePath3D, PoseTrajectory3D
 from evo.tools import plot
 from evo.tools.plot import PlotMode
 from evo.tools.settings import SETTINGS
+
+import matplotlib
+matplotlib.use('Agg')  # 使用无显示设备的后端
+
 from matplotlib import pyplot as plt
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
@@ -113,7 +117,6 @@ def eval_ate(frames, kf_ids, save_dir, iterations, final=False, monocular=False)
     return ate
 
 
-# TODO 怎么把pred和gt图像保存下来？最好是像NICE-SLAM一样，存到一张图方便比较。
 def eval_rendering(
         frames,
         gaussians,
@@ -160,20 +163,34 @@ def eval_rendering(
         ssim_array.append(ssim_score.item())
         lpips_array.append(lpips_score.item())
 
-        # 保存渲染的图像，方便实验和Debug
-        combined_image = np.concatenate((gt, pred), axis=1)
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.imshow(combined_image)
-        ax.axis("off")
-        title = (
-            f"GT (Left) | Pred (Right)\n"
-            f"PSNR: {psnr_score:.2f}, SSIM: {ssim_score:.2f}, LPIPS: {lpips_score:.2f}"
-        )
-        ax.set_title(title, fontsize=12, color="black")
+        if iteration == "final" or "before_opt":
+            rendering_dir = os.path.join(save_dir, "rendering", iteration)
+            os.makedirs(rendering_dir, exist_ok=True)
 
-        combined_path = os.path.join(save_dir, "rendering", f"{idx:06d}.png")
-        plt.savefig(combined_path, bbox_inches="tight", dpi=150)
-        plt.close(fig)
+            if gt.size == 0 or pred.size == 0:
+                print(f"Skipping idx {idx} due to empty image.")
+                continue
+
+            # gt_path = os.path.join(rendering_dir, f"gt_{idx:06d}.png")
+            # pred_path = os.path.join(rendering_dir, f"pred_{idx:06d}.png")
+            # cv2.imwrite(gt_path, gt)
+            # cv2.imwrite(pred_path, pred)
+
+            combined_image = np.concatenate((gt, pred), axis=1)
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.imshow(combined_image)
+            ax.axis("off")
+            title = (
+                f"GT (Left) | Pred (Right)\n"
+                f"PSNR: {psnr_score.item():.2f}, "
+                f"SSIM: {ssim_score.item():.2f}, "
+                f"LPIPS: {lpips_score.item():.2f}"
+            )
+            ax.set_title(title, fontsize=12, color="black")
+
+            combined_path = os.path.join(rendering_dir, f"{idx:06d}.png")
+            plt.savefig(combined_path, bbox_inches="tight", dpi=150)
+            plt.close(fig)
 
     output = dict()
     output["mean_psnr"] = float(np.mean(psnr_array))

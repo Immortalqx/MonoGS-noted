@@ -1,7 +1,7 @@
 inherit_from: "configs/rgbd/scannet/base_config.yaml"
 
 Dataset:
-  dataset_path: "datasets/scannet/scene0604_01"
+  dataset_path: "datasets/scannet/scene0603_00"
   Calibration:
     fx: 1170.187988
     fy: 1170.187988
