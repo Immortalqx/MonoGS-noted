@@ -148,10 +148,8 @@ def eval_rendering(
         pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(
             np.uint8
         )
-        gt = cv2.cvtColor(gt, cv2.COLOR_BGR2RGB)
-        pred = cv2.cvtColor(pred, cv2.COLOR_BGR2RGB)
-        img_pred.append(pred)
-        img_gt.append(gt)
+        img_pred.append(cv2.cvtColor(pred, cv2.COLOR_BGR2RGB))
+        img_gt.append(cv2.cvtColor(gt, cv2.COLOR_BGR2RGB))
 
         mask = gt_image > 0
 
