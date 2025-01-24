@@ -40,9 +40,9 @@ def evaluate_evo(poses_gt, poses_est, plot_dir, label, monocular=False):
     Log("RMSE ATE \[m]", ape_stat, tag="Eval")
 
     with open(
-        os.path.join(plot_dir, "stats_{}.json".format(str(label))),
-        "w",
-        encoding="utf-8",
+            os.path.join(plot_dir, "stats_{}.json".format(str(label))),
+            "w",
+            encoding="utf-8",
     ) as f:
         json.dump(ape_stats, f, indent=4)
 
@@ -98,7 +98,7 @@ def eval_ate(frames, kf_ids, save_dir, iterations, final=False, monocular=False)
 
     label_evo = "final" if final else "{:04}".format(iterations)
     with open(
-        os.path.join(plot_dir, f"trj_{label_evo}.json"), "w", encoding="utf-8"
+            os.path.join(plot_dir, f"trj_{label_evo}.json"), "w", encoding="utf-8"
     ) as f:
         json.dump(trj_data, f, indent=4)
 
@@ -113,15 +113,16 @@ def eval_ate(frames, kf_ids, save_dir, iterations, final=False, monocular=False)
     return ate
 
 
+# TODO 怎么把pred和gt图像保存下来？最好是像NICE-SLAM一样，存到一张图方便比较。
 def eval_rendering(
-    frames,
-    gaussians,
-    dataset,
-    save_dir,
-    pipe,
-    background,
-    kf_indices,
-    iteration="final",
+        frames,
+        gaussians,
+        dataset,
+        save_dir,
+        pipe,
+        background,
+        kf_indices,
+        iteration="final",
 ):
     interval = 5
     img_pred, img_gt, saved_frame_idx = [], [], []
@@ -158,6 +159,21 @@ def eval_rendering(
         psnr_array.append(psnr_score.item())
         ssim_array.append(ssim_score.item())
         lpips_array.append(lpips_score.item())
+
+        # 保存渲染的图像，方便实验和Debug
+        combined_image = np.concatenate((gt, pred), axis=1)
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.imshow(combined_image)
+        ax.axis("off")
+        title = (
+            f"GT (Left) | Pred (Right)\n"
+            f"PSNR: {psnr_score:.2f}, SSIM: {ssim_score:.2f}, LPIPS: {lpips_score:.2f}"
+        )
+        ax.set_title(title, fontsize=12, color="black")
+
+        combined_path = os.path.join(save_dir, "rendering", f"{idx:06d}.png")
+        plt.savefig(combined_path, bbox_inches="tight", dpi=150)
+        plt.close(fig)
 
     output = dict()
     output["mean_psnr"] = float(np.mean(psnr_array))

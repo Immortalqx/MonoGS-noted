@@ -17,7 +17,7 @@ class BackEnd(mp.Process):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.gaussians = None
+        self.gaussians = None # MonoGS中场景高斯基本都是在这里操作
         self.pipeline_params = None
         self.opt_params = None
         self.background = None

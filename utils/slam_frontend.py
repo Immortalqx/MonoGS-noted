@@ -38,6 +38,7 @@ class FrontEnd(mp.Process):
         self.requested_keyframe = 0
         self.use_every_n_frames = 1
 
+        # frontend的gaussians是用来tracking的，顺便提供eval的结果，毕竟一直在和backend同步
         self.gaussians = None
         self.cameras = dict()
         self.device = "cuda:0"

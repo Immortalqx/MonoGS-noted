@@ -47,9 +47,11 @@ class GaussianModel:
         self.max_radii2D = torch.empty(0, device="cuda")  # 在2D投影中，每个高斯的最大半径
         self.xyz_gradient_accum = torch.empty(0, device="cuda")  # 用于累积3D高斯中心位置的梯度
 
-        # TODO 待确定的两个参数
-        self.unique_kfIDs = torch.empty(0).int()  # 这个看起来是keyframe的id，但为什么用torch？
-        self.n_obs = torch.empty(0).int()  # 这个是什么？每一帧被观察的次数？
+        # 这个保存了keyframe的id，可以从这里确定是哪一个关键帧引入了这个高斯
+        # 根据致密化部分的代码可以发现，由某个关键帧引入的高斯，后续参与致密化产生的新高斯都与该关键帧绑定
+        self.unique_kfIDs = torch.empty(0).int()
+        # 这个应该是每一个高斯被观察到的次数，用来区分visibility和non visibility
+        self.n_obs = torch.empty(0).int()
 
         self.optimizer = None  # 优化器，用于调整上述参数以改进模型
 
