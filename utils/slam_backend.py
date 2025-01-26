@@ -312,6 +312,8 @@ class BackEnd(mp.Process):
                     gaussian_split = True
 
                 ## Opacity reset
+                # FIXME 尝试不对nonvisible进行reset，看看结果会怎么样
+                #  这样会导致内存占用过高、系统卡死。。。
                 if (self.iteration_count % self.gaussian_reset) == 0 and (
                     not update_gaussian
                 ):
