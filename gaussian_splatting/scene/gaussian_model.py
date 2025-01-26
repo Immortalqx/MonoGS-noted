@@ -340,8 +340,7 @@ class GaussianModel:
             max_steps=training_args.position_lr_max_steps,
         )
 
-        # TODO 又在其他函数定义新的类变量。
-        #  为什么不按照原版3DGS的来，而是使用help函数？
+        # FIXME 又在其他函数定义新的类变量。
         self.lr_init = training_args.position_lr_init * self.spatial_lr_scale
         self.lr_final = training_args.position_lr_final * self.spatial_lr_scale
         self.lr_delay_mult = training_args.position_lr_delay_mult
@@ -359,7 +358,7 @@ class GaussianModel:
                 # 使用xyz_scheduler_args函数（一个根据迭代次数返回学习率的调度函数）计算当前迭代次数的学习率
                 # lr = self.xyz_scheduler_args(iteration)
 
-                # TODO 上面是原版3DGS的做法，下面是MonoGS的做法，WHY？
+                # 上面是原版3DGS的做法，下面是MonoGS的做法，本质上都是调用helper，没任何区别
                 lr = helper(
                     iteration,
                     lr_init=self.lr_init,
@@ -426,6 +425,7 @@ class GaussianModel:
     def reset_opacity(self):
         # TODO 这里为什么不按原版3DGS的来呢
         #  原版似乎是倾向于放弃opacity已经很低的高斯，而MonoGS想抢救一下，让大家都重新来一遍。。。
+        #  怀疑这里是一个提升指标的小trick！
         # opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity) * 0.01))
         opacities_new = inverse_sigmoid(torch.ones_like(self.get_opacity) * 0.01)
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
@@ -434,7 +434,10 @@ class GaussianModel:
     def reset_opacity_nonvisible(
             self, visibility_filters
     ):  ##Reset opacity for only non-visible gaussians
-        # TODO 不理解为什么这里要给non-visible的高斯设置一个比较大的opacity
+        # TODO 不理解为什么这里要给non-visible的高斯设置一个比较大的opacity，这也是一个小trick吗？
+        #  visibility_filters是根据投影的2D高斯椭球半径>0计算来的，调整opacity按理说不影响visible的结果？！！
+        #  WHY WHY WHY WHY WHY
+        #  可以加一个实验试一试下面的代码有什么影响！
         opacities_new = inverse_sigmoid(torch.ones_like(self.get_opacity) * 0.4)
 
         for filter in visibility_filters:
