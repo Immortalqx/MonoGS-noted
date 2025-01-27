@@ -313,7 +313,10 @@ class BackEnd(mp.Process):
 
                 ## Opacity reset
                 # FIXME 尝试不对nonvisible进行reset，看看结果会怎么样
-                #  这样会导致内存占用过高、系统卡死。。。
+                #  这样会导致内存占用过高、系统卡死
+                #  如果提供足够的内存，最后会因为显存占用过高而失败
+                #  猜测：non-visible的gaussian可能opacity较低，变成伪影了，一直删不掉？
+                #   如果调高opacity，就会被其他帧看到，然后参与到优化中，最后被调整对、或者删除？
                 if (self.iteration_count % self.gaussian_reset) == 0 and (
                     not update_gaussian
                 ):
