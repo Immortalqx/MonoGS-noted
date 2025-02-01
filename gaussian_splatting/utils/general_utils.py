@@ -21,6 +21,7 @@ def inverse_sigmoid(x):
     return torch.log(x / (1 - x))
 
 
+# 没有使用的函数
 def PILtoTorch(pil_image, resolution):
     resized_image_PIL = pil_image.resize(resolution)
     resized_image = torch.from_numpy(np.array(resized_image_PIL)) / 255.0
@@ -30,6 +31,7 @@ def PILtoTorch(pil_image, resolution):
         return resized_image.unsqueeze(dim=-1).permute(2, 0, 1)
 
 
+# 没有使用的函数
 def PILtoTorch2(pil_image):
     # resized_image_PIL = pil_image.resize(resolution)
     resized_image = torch.from_numpy(np.array(pil_image)) / 255.0
@@ -39,8 +41,10 @@ def PILtoTorch2(pil_image):
         return resized_image.unsqueeze(dim=-1).permute(2, 0, 1)
 
 
+# 本质上也是没有使用的函数
+# 指数衰减学习率调度函数，支持延迟启用
 def get_expon_lr_func(
-    lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
+        lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
 ):
     """
     Copied from Plenoxels
@@ -76,12 +80,16 @@ def get_expon_lr_func(
     #               lr_delay_steps=lr_delay_steps, lr_delay_mult=lr_delay_mult, max_steps=max_steps)
 
 
+# 本质上就是上面def get_expon_lr_func的东西，搬出来了。所以MonoGS这里用的就是3DGS原来的策略
+# 吐槽：莫名其妙的修改。。。
 def helper(
-    step, lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
+        step, lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
 ):
+    # 如果步数小于0或学习率为0，直接返回0，表示不进行优化
     if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
         # Disable this parameter
         return 0.0
+    # 如果设置了学习率延迟步数，计算延迟调整后的学习率
     if lr_delay_steps > 0:
         # A kind of reverse cosine decay.
         delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
@@ -89,11 +97,14 @@ def helper(
         )
     else:
         delay_rate = 1.0
+    # 根据步数计算学习率的对数线性插值，实现从初始学习率到最终学习率的平滑过渡
     t = np.clip(step / max_steps, 0, 1)
     log_lerp = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
+    # 返回调整后的学习率
     return delay_rate * log_lerp
 
 
+# 提取下三角矩阵的元素
 def strip_lowerdiag(L):
     uncertainty = torch.zeros((L.shape[0], 6), dtype=torch.float, device="cuda")
 
@@ -106,10 +117,12 @@ def strip_lowerdiag(L):
     return uncertainty
 
 
+# 提取对称矩阵元素，调用 `strip_lowerdiag`
 def strip_symmetric(sym):
     return strip_lowerdiag(sym)
 
 
+# 根据四元数构建旋转矩阵，还是cuda上的tensor
 def build_rotation(r):
     norm = torch.sqrt(
         r[:, 0] * r[:, 0] + r[:, 1] * r[:, 1] + r[:, 2] * r[:, 2] + r[:, 3] * r[:, 3]
@@ -136,6 +149,7 @@ def build_rotation(r):
     return R
 
 
+# 根据四元数和尺度因子构建缩放-旋转矩阵，还是cuda上的tensor
 def build_scaling_rotation(s, r):
     L = torch.zeros((s.shape[0], 3, 3), dtype=torch.float, device="cuda")
     R = build_rotation(r)
@@ -148,6 +162,7 @@ def build_scaling_rotation(s, r):
     return L
 
 
+# 并没有使用的函数
 def safe_state(silent):
     old_f = sys.stdout
 
